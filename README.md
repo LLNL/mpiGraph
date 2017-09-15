@@ -7,14 +7,15 @@ Benchmark to generate network bandwidth images
 ## Run
 Run one MPI task per node:
 
-    srun -n <#nodes> -N <#nodes> ./mpiGraph 1048576 10 10 > mpiGraph.out
+    SLURM: srun -n <nodes> -N #nodes> ./mpiGraph 1048576 10 10 > mpiGraph.out
+    Open MPI: mpirun --map-by node -np <nodes> ./mpiGraph 1048576 10 10 > mpiGraph.out
 
 General usage:
 
     mpiGraph <size> <iters> <window>
 
-To compute bandwidth, each task averages the bandwidth from <iters> iterations.
-In each iteration, a process sends <window> messages of size <size> bytes to another process
+To compute bandwidth, each task averages the bandwidth from *iters* iterations.
+In each iteration, a process sends *window* number of messages of size *size* bytes to another process
 while it simultaneously receives an equal number of messages of equal size from another process.
 The source and destination processes in each step are not necessary the same process.
 
