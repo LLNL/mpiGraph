@@ -1,4 +1,5 @@
-mpiGraph - stresses network and generates bandwidth image
+# mpiGraph
+Benchmark to stress network and generates bandwidth images
 
 ## Build 
     make
@@ -6,11 +7,11 @@ mpiGraph - stresses network and generates bandwidth image
 ## Run
 Run one MPI task per node:
 
-    srun -n <#nodes> -N <#nodes> ./mpiGraph > mpiGraph.out &
+    srun -n <#nodes> -N <#nodes> ./mpiGraph > mpiGraph.out
 
 If you encounter errors, try reducing message counts, e.g.:
 
-    srun -n <#nodes> -N <#nodes> ./mpiGraph 4096 10 10 > mpiGraph.out &
+    srun -n <#nodes> -N <#nodes> ./mpiGraph 4096 10 10 > mpiGraph.out
 
 General usage:
 
@@ -20,7 +21,7 @@ Each node sends a total of
 <iterations_per_task> * <window_size_of_outstanding_sends/recvs>
 messages, each of <msg_size_in_bytes> to every other task.
 
-Note:  You can run more than one task per node if your intent is to
+You can run more than one task per node if your intent is to
 stress the MPI, but in this case, the resulting bandwidth image may
 be difficult to interpret.
 
@@ -28,17 +29,15 @@ Watch progress:
 
     tail -f mpiGraph.out
 
-## Results ----------------
+## Results
 Post-process to create html report with bitmaps in
 "mpiGraph.out_html/index.html":
+
     crunch_mpiGraph mpiGraph.out
 
-This may build very large index.html files.  To reduce the size of
-the html file, you can drop the -z option, however, be aware that
-this will disable the zoom feature.
-
 View results:
-    firefox mpiGraph.out_html/index.html
+
+    firefox file://`pwd`/mpiGraph.out_html/index.html
 
 # Description
 
