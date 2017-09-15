@@ -82,3 +82,6 @@ bandwidths between all task pairings in a reasonable (scalable) time.
 Additionally, the resulting bandwidth images allow one to read the
 test results in a very concise format that scales very well up to
 machine sizes of one or two thousand nodes.
+
+## References
+[Contention-free Routing for Shift-based Communication in MPI Applications on Large-scale Infiniband Clusters](https://e-reports-ext.llnl.gov/pdf/380228.pdf), Adam Moody, LLNL-TR-418522, Oct 2009
