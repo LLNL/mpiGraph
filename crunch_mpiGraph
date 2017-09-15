@@ -1,0 +1,828 @@
+#!/usr/local/bin/perl -w
+
+# Copyright (c) 2007, Lawrence Livermore National Security (LLNS), LLC
+# Produced at the Lawrence Livermore National Laboratory (LLNL)
+# Written by Adam Moody <moody20@llnl.gov>.
+# UCRL-CODE-232117.
+# All rights reserved.
+# 
+# This file is part of mpiGraph. For details, see
+#   http://www.sourceforge.net/projects/mpigraph
+# Please also read the Additional BSD Notice below.
+# 
+# Redistribution and use in source and binary forms, with or without modification,
+# are permitted provided that the following conditions are met:
+# â* Redistributions of source code must retain the above copyright notice, this
+#    list of conditions and the disclaimer below.
+# â* Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the disclaimer (as noted below) in the documentation
+#    and/or other materials provided with the distribution.
+# â* Neither the name of the LLNL nor the names of its contributors may be used to
+#    endorse or promote products derived from this software without specific prior
+#    written permission.
+# â* 
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+# IN NO EVENT SHALL LLNL, THE U.S. DEPARTMENT
+# OF ENERGY OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+# EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+# THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# 
+# Additional BSD Notice
+# 1. This notice is required to be provided under our contract with the U.S. Department
+#    of Energy (DOE). This work was produced at LLNL under Contract No. W-7405-ENG-48
+#    with the DOE.
+# 2. Neither the United States Government nor LLNL nor any of their employees, makes
+#    any warranty, express or implied, or assumes any liability or responsibility for
+#    the accuracy, completeness, or usefulness of any information, apparatus, product,
+#    or process disclosed, or represents that its use would not infringe privately-owned
+#    rights.
+# 3. Also, reference herein to any specific commercial products, process, or services
+#    by trade name, trademark, manufacturer or otherwise does not necessarily constitute
+#    or imply its endorsement, recommendation, or favoring by the United States Government
+#    or LLNL. The views and opinions of authors expressed herein do not necessarily state
+#    or reflect those of the United States Government or  LLNL and shall not be used for
+#    advertising or product endorsement purposes.
+
+# mpiGraph.c ========================================================================
+#
+# The crunch_mpiGraph script is then run on this output to generate a report.  A key
+# component in this report are a pair of bitmap images representing bandwidth values
+# between different task pairings.  Pixels in this image are colored depending on
+# relative bandwidth values.  The maximum bandwidth value is set to pure white (value
+# 255) and other values are scaled to black (0) depending on their percentage of the
+# maximum.  Interesting patterns, or the lack thereof, make it easy to visually inspect
+# and identify anomalous behavior in the system.  One may then zoom in and inspect
+# image features in more detail by hovering the mouse cursor over the feature.
+# Javascript embedded in the HTML report manages a pop-up tooltip with a zoomed-in
+# view of the cursor location.
+
+use hostlist_lite qw(compress);
+
+# print usage then exit
+sub usage
+{
+  my $exit_code = shift @_;
+  print "\n";
+  print "  crunch_mpiGraph -- process mpiGraph output into images or sort links by performance\n";
+  print "\n";
+  print "  Usage:  crunch_mpiGraph [-z|-nz] [-dist] <mpiGraph_output>\n";
+  print "\n";
+  print "  Node-to-node bandwidth options:\n";
+  print "    -max       Set maximum bandwidth value (in MB/sec) to scale by\n";
+  print "    -z         add javascript to html for zooming\n";
+  print "               This may produce very large index.html files, but it's very useful for inspecting detailed features\n";
+  print "    -nz        Disable javascript zoom in report\n";
+  print "    -dist      set horizontal index to distance away from node in a given row, rather than MPI rank, so that\n";
+  print "               data taken on different nodes at the same time are aligned into columns\n";
+  print "\n";
+  exit $exit_code;
+}
+
+# print usage if no arguments given on command line
+if (not @ARGV) { usage(1); }
+
+my @imagerows = ();
+
+# set up default parameters and read command line arguments
+$mode = "html";
+$strip_mpi_rank = 1;
+$maxbw = 0;
+my %args = (
+  dist => 0,
+  zoom => 1,
+);
+while (@ARGV) {
+  $arg = shift @ARGV;
+  if ($arg =~ /^-/) {
+    if    ($arg =~ /^-max/)     { $maxbw = shift @ARGV; }
+    elsif ($arg =~ /^-html/)    { $mode = "html"; }
+    elsif ($arg =~ /^-dist/)    { $args{dist} = 1; }
+    elsif ($arg =~ /^-mpirank/) { $strip_mpi_rank = 0; }
+    elsif ($arg =~ /^-z/)       { $args{zoom} = 1; }
+    elsif ($arg =~ /^-nz/)      { $args{zoom} = 0; }
+    else { print "Unrecognized option: $arg\n";  usage(1); } 
+  } else {
+    push @{$args{files}}, $arg;
+  }
+}
+
+# compute_percentages($base, @values)
+sub compute_percentages
+{
+  my $base = shift @_;
+  my @ret  = ();
+  foreach my $val (@_) {
+    push @ret, sprintf("%3.1f%", $val / $base * 100);
+  }
+  return @ret;
+}
+
+# read in the mpiGraph files, values are averaged if there is more than one file
+my %sendtable = ();
+my %recvtable = ();
+foreach my $file (@{$args{files}}) {
+  if (not -r $file) { print "File unreadable: $file\n"; exit 0; }
+  ($msgsize, $times, $window, $testuser, $testtime) = read_file($file, \%sendtable, \%recvtable);
+}
+my @sendstats = min_max_avg(\%sendtable);
+my @recvstats = min_max_avg(\%recvtable);
+my @sendpercs = compute_percentages($sendstats[1], @sendstats);
+my @recvpercs = compute_percentages($recvstats[1], @recvstats);
+
+####################
+# NODE-TO-NODE BANDWIDTH REPORT
+# Given a mpiGraph output, generate report including bandwidth images.
+####################
+
+if ($mode eq "html") {
+  # generate html report
+  $dir = (@{$args{files}})[0] . "_html";
+  mkdir $dir;
+
+  # write out send bitmap
+  output_table_bitmap(\%sendtable, "$dir/send.bmp", @sendstats);
+  my $sendimgjs = "var sendimgjs = [\n" . join(",\n", @imagerows) . "\n];\n";
+
+  # write out recv bitmap
+  output_table_bitmap(\%recvtable, "$dir/recv.bmp", @recvstats);
+  my $recvimgjs = "var recvimgjs = [\n" . join(",\n", @imagerows) . "\n];\n";
+
+  # write out index.html
+  print "Writing $dir/index.html ...\n";
+  open(HTML, ">$dir/index.html");
+  print HTML "<html>\n";
+
+  # write javascript
+  print HTML "<script type=\"text/javascript\">";
+  $zoomjs = "var zoomflag = 1;\n";
+  my $sendstatsjs = "var sendstats = [];\n";
+  $sendstatsjs   .= "sendstats['min'] = $sendstats[0];\n";
+  $sendstatsjs   .= "sendstats['max'] = $sendstats[1];\n";
+  $sendstatsjs   .= "sendstats['avg'] = $sendstats[2];\n";
+  my $recvstatsjs = "var recvstats = [];\n";
+  $recvstatsjs   .= "recvstats['min'] = $recvstats[0];\n";
+  $recvstatsjs   .= "recvstats['max'] = $recvstats[1];\n";
+  $recvstatsjs   .= "recvstats['avg'] = $recvstats[2];\n";
+  if (not $args{zoom}) {
+    $zoomjs = "var zoomflag = 0;\n";
+    $sendimgjs = "var sendimgjs = [];\n";
+    $recvimgjs = "var recvimgjs = [];\n";
+  }
+  my ($node_count, $rankmapjs) = return_rankmapjs(\%sendtable);
+  my $factor = 1;
+  while($factor * $node_count < 100) { $factor *= 2; }
+  print HTML "
+var border = 1;
+var width  = $factor;
+var count  = $node_count;
+$zoomjs
+$sendstatsjs
+$recvstatsjs
+$rankmapjs
+$sendimgjs
+$recvimgjs
+var tooltip;
+";
+  print HTML '
+function loading() {
+  var sendimg = document.getElementById("send_img");
+  sendimg.onmousemove=sendtrack;
+  sendimg.onmouseout=hidetip;
+  var recvimg = document.getElementById("recv_img");
+  recvimg.onmousemove=recvtrack;
+  recvimg.onmouseout=hidetip;
+
+  tooltip = document.createElement("div");
+  tooltip.style.visibility = "hidden";
+  document.body.appendChild(tooltip);
+}
+
+function sendtrack(e) {
+  var img  = document.getElementById("send_img");
+  var zoom = document.getElementById("send_zoom");
+  track(e,img," ==> ",sendimgjs,sendstats["max"],zoom);
+}
+
+function recvtrack(e) {
+  var img  = document.getElementById("recv_img");
+  var zoom = document.getElementById("recv_zoom");
+  track(e,img," <== ",recvimgjs,recvstats["max"],zoom);
+}
+
+function track(e,img,dir,imgjs,max,zoom) {
+  var relX = e.pageX - img.offsetLeft;
+  var relY = e.pageY - img.offsetTop;
+  var col = Math.floor((relX - border) / width);
+  var row = Math.floor((relY - border) / width);
+
+  document.body.style.cursor = "crosshair";
+
+  if (row >= 0 && col >= 0 && row < count && col < count) {
+    if (zoomflag) {
+      var pixval = imgjs[(count*width)-1-row*width][col*width];
+      var bw     = Math.round((max * pixval) / 255);
+      tooltip.innerHTML = \'<div style="background-color: #AAFFFF;border: solid 1px; font-size: large;">\' +
+	"(" + relX + ", " + relY + ")<br>" +
+	rankmap[row] + dir + rankmap[col] + "<br>" + bw + " MB/sec" + "<br>Measured by: " + rankmap[row] +
+	zoomed(row,col,imgjs,dir,max) + \'</div>\';
+    } else {
+      tooltip.innerHTML = \'<div style="background-color: #AAFFFF;border: solid 1px; font-size: large;">\' +
+	"(" + relX + ", " + relY + ")<br>" +
+	rankmap[row] + dir + rankmap[col] + "<br>Measured by: " + rankmap[row] +
+	\'</div>\';
+    }
+    tooltip.style.position = "absolute";
+    tooltip.style.left = e.pageX + 20;
+    tooltip.style.top    = "";
+    tooltip.style.bottom = "";
+    if ((e.pageY-window.pageYOffset) < window.innerHeight / 2) {
+      tooltip.style.top = e.pageY + 20;
+    } else {
+      tooltip.style.bottom = window.innerHeight - e.pageY + 20;
+    }
+    tooltip.style.visibility = "visible"; 
+  } else {
+    hidetip();
+  }
+}
+
+function hidetip() {
+  tooltip.style.visibility = "hidden";
+  document.body.style.cursor = "auto";
+}
+
+function zoomed(row,col,imgjs,dir,max) {
+  var rows = "";
+  var pad = 5;
+  var header = "<td></td>";
+  for(c=pad*2; c>=0; c--) {
+    //var c2 = col*width+pad-c;
+    //header += "<td style=\"background-color:#AAFFFF;\">" + rankmap[Math.floor(c2/width)] + "</td>";
+    var c2 = col+pad-c;
+    header += "<td style=\"background-color:#AAFFFF;\">" + rankmap[c2] + "</td>";
+  }
+  header = "<tr>" + header + "</tr>\n";
+  for(r=pad*2; r>=0; r--) {
+    var cell = "";
+    for(c=pad*2; c>=0; c--) {
+      //var r2 = row*width+pad-r;
+      //var c2 = col*width+pad-c;
+      var r2 = row*width+(pad-r)*width;
+      var c2 = col*width+(pad-c)*width;
+      if (r2 >= 0 && c2 >= 0 && r2 < count*width && c2 < count*width) {
+        var pixval = imgjs[(count*width)-1-r2][c2];
+        var bw     = Math.round((max * pixval) / 255);
+        var color  = (pixval < 128) ? "color: #FFFFFF;" : "";
+        var border = (r == pad && c == pad) ? "border: solid 2px #FF0000;" : "";
+        cell += "<td style=\"background-color: rgb(" + pixval + "," + pixval + "," + pixval + ");" + color + border + "\">" + bw + "</td>";
+      } else {
+        cell += "<td></td>";
+      }
+    }
+    rows += "<tr>" + "<td style=\"background-color:#AAFFFF\">" 
+            + rankmap[Math.floor(r2/width)] + dir + cell + "</td></tr>\n"; 
+  }
+  return "<table>" + header + rows + "</table>";
+}
+';
+  print HTML "</script>\n";
+
+  # now write out main body starting with header
+  print HTML "<body onload=\"loading();\">\n";
+  print HTML "<h1>mpiGraph Details</h1>\n";
+  print HTML "<table>\n";
+  print HTML "<tr><td>Date:</td><td>" . localtime($testtime) . "</td></tr>\n";
+  my ($hostcount, $hoststr) = output_rankmap(\%sendtable, "$dir/map.txt");
+  print HTML "<tr><td>Nodes:</td><td>" . $hostcount . "</td></tr>\n";
+  print HTML "<tr><td>Node list:</td><td>" . $hoststr . "</td></tr>\n";
+  my $passwd = `grep ":$testuser:" /etc/passwd`;
+  my @parts = split(":", $passwd);
+  print HTML "<tr><td>Run by:</td><td>" . $parts[0] . " (" . $parts[4]. ")</td></tr>\n";
+  print HTML "<tr><td>MsgSize:</td><td>$msgsize</td></tr>\n";
+  print HTML "<tr><td>Times:</td><td>$times</td></tr>\n";
+  print HTML "<tr><td>Window:</td><td>$window</td></tr>\n";
+  print HTML "</table><br>\n";
+  print HTML "<a href=\"map.txt\">MPI rank to node mapping</a><br>";
+
+  my ($min, $max, $avg);
+
+  # write out send bandwidth portion
+  print HTML "<h1>Send Bandwidth</h1>\n";
+  print HTML "<table border=\"1\">\n<tr><td>min MB/s</td><td>max MB/s</td><td>avg MB/s</td></tr>\n";
+  ($min, $max, $avg) = @sendstats;
+  print HTML "<tr><td>$min</td><td>$max</td><td>$avg</td>";
+  ($min, $max, $avg) = @sendpercs;
+  print HTML "<tr><td>$min</td><td>$max</td><td>$avg</td>";
+  print HTML "</tr>\n</table>\n";
+  print HTML "<img id=\"send_img\" src=\"send.bmp\" border=\"1\"/>";
+  print HTML "<img src=\"send_hist.png\" border=\"1\"/>";
+  print HTML "<div id=\"send_zoom\"></div>\n";
+
+  # write out recv bandwidth portion
+  print HTML "<h1>Receive Bandwidth</h1>\n";
+  print HTML "<table border=\"1\"><tr><td>min MB/s</td><td>max MB/s</td><td>avg MB/s</td></tr>\n";
+  ($min, $max, $avg) = @recvstats;
+  print HTML "<tr><td>$min</td><td>$max</td><td>$avg</td>";
+  ($min, $max, $avg) = @recvpercs;
+  print HTML "<tr><td>$min</td><td>$max</td><td>$avg</td>";
+  print HTML "</tr>\n</table>\n";
+  print HTML "<img id=\"recv_img\" src=\"recv.bmp\" border=\"1\"/>\n";
+  print HTML "<img src=\"recv_hist.png\" border=\"1\"/>\n";
+  print HTML "<div id=\"recv_zoom\"></div>\n";
+
+  # close index.html
+  print HTML "</body></html>";
+  close(HTML);
+
+  # create histogram images
+  `cat $dir/recv.bmp | anytopnm | ppmtopgm | pnmhistmap | pnmtopng > $dir/recv_hist.png`;
+  `cat $dir/send.bmp | anytopnm | ppmtopgm | pnmhistmap | pnmtopng > $dir/send_hist.png`;
+
+  # write out node performance pages
+#  output_table(\%sendtable, "$dir/send.html", "$dir/send_rows_cols.html", @sendstats);
+#  output_table(\%recvtable, "$dir/recv.html", "$dir/recv_rows_cols.html", @recvstats);
+
+  my $pwd = `pwd`;
+  chomp $pwd;
+  print "Report complete:  firefox file://$pwd/$dir/index.html\n";
+}
+
+# this reads in an mpiGraph output file and fills sendtable and recvtable
+# it returns the parameters used to run the job and the time the file was created
+sub read_file
+{
+  my $file      = shift @_;
+  my $sendtable = shift @_;
+  my $recvtable = shift @_;
+
+  print "Reading $file...\n";
+  my $sendflag = 0;
+  my $recvflag = 0;
+  open(IN,$file);
+  while (my $line = <IN>)
+  {
+    chomp $line;
+
+    # empty lines indicate end of table
+    if (not $line) {
+      $sendflag = 0;
+      $recvflag = 0;
+    }
+
+    my @parts = split('\t', $line);
+
+    # process header info, may start read of table data
+    if    ($line =~ /MsgSize\t/) { $msgsize = $parts[1]; next; }
+    elsif ($line =~ /Times\t/)   { $times   = $parts[1]; next; }
+    elsif ($line =~ /Window\t/)  { $window  = $parts[1]; next; }
+    elsif ($line =~ /Send\t/) { $sendflag = 1; @colnames = @parts; next; }
+    elsif ($line =~ /Recv\t/) { $recvflag = 1; @colnames = @parts; next; }
+
+    # if reading table, read in next row
+    if ($sendflag or $recvflag) {
+      $rh = $parts[0];
+      $rh =~ s/[a-zA-Z\s]*$//; # strip off trailing letters and spaces
+      $rh =~ s/^\s*\d+://;     # strip off leading spaces and [0-9]+:
+      if ($strip_mpi_rank) { $rh =~ s/:\d+$//; } # remove mpi rank from node name
+#TODO: hack to remove suffix starting with '-'
+#print "-- $rh -- ";
+      $rh =~ s/\-\w*$//;     # strip off trailing prefix starting with '-'
+#print "-- $rh -- \n";
+      for(my $i = 1; $i < @parts; $i++) {
+        $ch = $colnames[$i];
+        if ($strip_mpi_rank) { $ch =~ s/:\d+$//; } # remove mpi rank from node name
+        $ch =~ s/\-\w*$//;     # strip off trailing prefix starting with '-'
+        if ($sendflag) { push @{$$sendtable{$rh}{$ch}}, $parts[$i]; }
+        if ($recvflag) { push @{$$recvtable{$rh}{$ch}}, $parts[$i]; }
+      }
+    }
+  }
+  close(IN);
+
+  return $msgsize, $times, $window, (stat($file))[4,9];
+}
+
+# return avg of a list of numbers
+sub avg
+{
+  if (@_) {
+    my $sum = 0;
+    foreach my $val (@_) { $sum += $val; }
+    return $sum / @_;
+  }
+}
+
+# find min, max, and compute average of all values in table
+sub min_max_avg
+{
+  my $table = shift @_;
+  my $row = (keys %$table)[1];
+  my $col = (keys %{$$table{$row}})[0];
+  my $min = avg(@{$$table{$row}{$col}});
+  my $max = avg(@{$$table{$row}{$col}});
+  my $sum = 0;
+  my $count = 0;
+  foreach my $row (sort keys %$table) {
+    foreach my $col (sort keys %{$$table{$row}}) {
+      if ($col eq $row) { next; }
+      my $value = avg(@{$$table{$row}{$col}});
+      if ($value < $min) { $min = $value; }
+      if ($value > $max) { $max = $value; }
+      $sum += $value;
+      $count++;
+    }
+  }
+  my $avg = $sum / $count;
+  $min = sprintf("%0.3f", $min);
+  $max = sprintf("%0.3f", $max);
+  $avg = sprintf("%0.3f", $avg);
+  return ($min, $max, $avg);
+}
+
+# output mapping of MPI rank to nodename
+sub output_rankmap
+{
+  my $table = shift @_;
+  my $outfile = shift @_;
+  print "Writing $outfile ...\n";
+  open(MAP, ">$outfile");
+  print MAP "Rank\tNode\n";
+  my @nodes = ();
+  my @rows = keys %$table;
+  @rows = (sort {($a =~ /(\d+)$/)[0] <=> ($b =~ /(\d+)$/)[0]} @rows);
+  $rank = -1;
+  foreach $row (@rows)
+  {
+    if ($strip_mpi_rank) { ($node) = ($row =~ /([a-zA-Z]+\d*)/); $rank++; }
+    else { ($node, $rank) = ($row =~ /([a-zA-Z]+\d*):(\d+)/); }
+    if ($node) {
+      print MAP "$rank\t$node\n";
+      push @nodes, $node;
+    }
+  }
+  close(MAP);
+#  my $nodelist = join(",", @nodes);  # if you don't have compress(), use this instead
+  my $nodelist = hostlist_lite::compress(@nodes);
+  return (scalar(@nodes), $nodelist);
+}
+
+# write out bandwidth table
+# and average across rows and down columns for html report
+sub output_table
+{
+  my $table   = "";
+  my $outfile = "";
+  my $outfile_rows_cols = "";
+  my @stats = ();
+
+  if ($mode eq "html") {
+    $table   = shift @_;
+    $outfile = shift @_;
+    $outfile_rows_cols = shift @_;
+    @stats   = @_;
+  } else {
+    $table = shift @_;
+    @stats = @_;
+  }
+  if (not $outfile_rows_cols) { $outfile_rows_cols = $outfile; }
+
+  print "Writing $outfile_rows_cols ...\n";
+  my ($min, $max, $avg) = @stats;
+  if ($mode eq "html") {
+    open(OUT, ">$outfile");
+    print OUT table((
+	row((cell("Min"), cell("Max"), cell("Avg"))),
+        row((cell($min),  cell($max),  cell($avg))),
+    ));
+    close(OUT);
+  }
+
+  my @outrows = ();
+  my %rowsum = ();
+  my %colsum = ();
+  my @rows = keys %$table;
+  @rows = (sort {($a =~ /(\d+)$/)[0] <=> ($b =~ /(\d+)$/)[0]} @rows);
+  my @cols = @rows;
+  my $row_count = scalar(@rows);
+  foreach my $r (@rows) {
+    $rowsum{$r} = 0;
+    $colsum{$r} = 0;
+  }
+  my $row_index = 0;
+  foreach my $r (@rows)
+  {
+    my @outcells = ();
+    foreach my $c (@cols)
+    {
+      my $row = $r;
+      my $col = $c;
+      $row =~ s/:[\w\s]*$//;
+      $col =~ s/:[\w\s]*$//;
+      my $val = avg(@{$$table{$r}{$c}});
+      if ($row eq $col) {
+        $color = "";
+      } else {
+        $perf  = $val / $max;
+        $color = set_color($perf);
+        $rowsum{$r} += $perf;
+        $colsum{$c} += $perf;
+      }
+      push @outcells, cell($val, $color);
+    }
+    if ($args{dist}) {
+      for(my $s = 0; $s < $row_index; $s++) { my $temp = shift @outcells; push @outcells, $temp; }
+    }
+    push @outrows, row(@outcells);
+    $row_index++;
+  }
+  if ($mode eq "html")   {
+    my $br = "<br>\n";
+    open (OUT, ">$outfile_rows_cols");
+
+    print OUT "<a href=\"#slowest\">Ordered by slowest-to-fastest</a><br>\n";
+    print OUT "<a href=\"#mpi_rank\">Ordered by MPI rank</a><br>\n";
+
+    print OUT $br;
+
+    my @slowestrows = (sort {$rowsum{$a} <=> $rowsum{$b}} keys %rowsum); 
+    my @slowestcols = (sort {$colsum{$a} <=> $colsum{$b}} keys %colsum); 
+    my $minrow = sprintf("%0.1f", $rowsum{$slowestrows[ 0]} * 100 / ($row_count));
+    my $maxrow = sprintf("%0.1f", $rowsum{$slowestrows[-1]} * 100 / ($row_count));
+    my $mincol = sprintf("%0.1f", $colsum{$slowestcols[ 0]} * 100 / ($row_count));
+    my $maxcol = sprintf("%0.1f", $colsum{$slowestcols[-1]} * 100 / ($row_count));
+    print OUT "Minimum and maximum performance" . $br;
+    print OUT "<table border=\"1\">\n";
+    print OUT "<tr><td>Min Row \%Max</td><td>Max Row \%Max</td><td>Min Col \%Max</td><td>Max Col \%Max</td></tr>\n";
+    print OUT "<tr><td>$minrow\%</td><td>$maxrow\%</td><td>$mincol\%</td><td>$maxcol\%</td></tr>\n";
+    print OUT "</table>\n";
+
+    print OUT $br, $br;
+
+    # print average across row and column for each rank, in order of slowest to fastest
+    print OUT "<a name=\"slowest\"/>\n";
+    print OUT "Ordered by slowest-to-fastest" . $br;
+    print OUT "<table border=\"1\">\n";
+    print OUT "<tr><td>Row</td><td>avg MB/s</td><td>\%Max</td><td>Column</td><td>avg MB/s</td><td>\%Max</td></tr>\n";
+    for(my $r = 0; $r < @slowestrows; $r++)
+    {
+      print OUT "<tr>";
+      my $i = $slowestrows[$r];
+      $perf = $rowsum{$i} / ($row_count); 
+      $perf = sprintf("%0.4f", $perf);
+      $bw   = sprintf("%0.1f", $perf*$max);
+      $perc = sprintf("%0.1f", $perf*100);
+      print OUT "<td bgcolor=\"" . set_color($perf) . "\">" . $i    . "</td>";
+      print OUT "<td bgcolor=\"" . set_color($perf) . "\">" . $bw   . "</td>";
+      print OUT "<td bgcolor=\"" . set_color($perf) . "\">" . $perc . "%</td>";
+
+      $i = $slowestcols[$r];
+      $perf = $colsum{$i} / ($row_count); 
+      $perf = sprintf("%0.4f", $perf);
+      $bw   = sprintf("%0.1f", $perf*$max);
+      $perc = sprintf("%0.1f", $perf*100);
+      print OUT "<td bgcolor=\"" . set_color($perf) . "\">" . $i    . "</td>";
+      print OUT "<td bgcolor=\"" . set_color($perf) . "\">" . $bw   . "</td>";
+      print OUT "<td bgcolor=\"" . set_color($perf) . "\">" . $perc . "%</td>";
+      print OUT "</tr>\n";
+    }
+    print OUT "</table>\n"; 
+
+    print OUT "<br><br>\n";
+
+    # print average across row and column for each rank, in order of MPI ranks
+    print OUT "<a name=\"mpi_rank\"/>\n";
+    print OUT "Ordered by MPI rank" . $br;
+    print OUT "<table border=\"1\">\n";
+    print OUT "<tr><td>Row</td><td>avg MB/s</td><td>\%Max</td><td>Column</td><td>avg MB/s</td><td>\%Max</td></tr>\n";
+    for(my $r = 0; $r < @rows; $r++)
+    {
+      print OUT "<tr>";
+      my $i = $rows[$r];
+      $perf = $rowsum{$i} / ($row_count); 
+      $perf = sprintf("%0.4f", $perf);
+      $bw   = sprintf("%0.1f", $perf*$max);
+      $perc = sprintf("%0.1f", $perf*100);
+      print OUT "<td bgcolor=\"" . set_color($perf) . "\">" . $i    . "</td>";
+      print OUT "<td bgcolor=\"" . set_color($perf) . "\">" . $bw   . "</td>";
+      print OUT "<td bgcolor=\"" . set_color($perf) . "\">" . $perc . "%</td>";
+
+      $perf = $colsum{$i} / ($row_count); 
+      $perf = sprintf("%0.4f", $perf);
+      $bw   = sprintf("%0.1f", $perf*$max);
+      $perc = sprintf("%0.1f", $perf*100);
+      print OUT "<td bgcolor=\"" . set_color($perf) . "\">" . $i    . "</td>";
+      print OUT "<td bgcolor=\"" . set_color($perf) . "\">" . $bw   . "</td>";
+      print OUT "<td bgcolor=\"" . set_color($perf) . "\">" . $perc . "</td>";
+      print OUT "</tr>\n";
+    }
+    print OUT "</table>\n"; 
+
+    close(OUT);
+  } else {
+    print table(@outrows) . "\n";
+    print "\n";
+  }
+}
+
+# convert table to a list of rows, each with comma-separated values
+# then call write_bitmap() function to write bitmap file
+sub output_table_bitmap
+{
+  my $table   = shift @_;
+  my $outfile = shift @_;
+  my @stats   = @_;
+
+  print "Writing $outfile ...\n";
+  my @outrows = ();
+  my ($min, $max, $avg) = @stats;
+  if ($maxbw) { $max = $maxbw; }
+  my @rows = keys %$table;
+  @rows = (sort {($a =~ /(\d+)$/)[0] <=> ($b =~ /(\d+)$/)[0]} @rows);
+  @cols = @rows;
+  my $row_index = 0;
+  foreach $row (@rows) {
+    my @outcells = ();
+    foreach $col (@cols) {
+      if ($row eq $col) {
+        $perf = 1;
+      } else {
+        my $value = avg(@{$$table{$row}{$col}});
+        $perf = $value / $max;
+        if ($perf < 0.0) { print "ERROR: avg bw < 0: " .      join(", ", @{$$table{$row}{$col}}), "\n"; }
+        if ($perf > 1.0) { print "ERROR: avg bw > max bw: " . join(", ", @{$$table{$row}{$col}}), "\n"; }
+      }
+      if ($perf > 1.0) {
+        print "ERROR: $perf > 1.0, setting to 1.0 and continuing ... \n";
+        $perf = 1.0;
+      }
+      if ($perf < 0) {
+        print "ERROR: $perf < 0.0, setting to 0.0 and continuing ... \n";
+        $perf = 0.0;
+      }
+      $color = int($perf * 255);
+      push @outcells, $color;
+    }
+    if ($args{dist}) {
+      for(my $s = 0; $s < $row_index; $s++) { my $temp = shift @outcells; push @outcells, $temp; }
+    }
+    push @outrows, join(",", @outcells);
+    $row_index++;
+  }
+  write_bitmap($outfile, @outrows);
+}
+
+# write_bitmap(filename, @rows with comma-delimited column values)
+sub write_bitmap
+{
+  my $bmpfile = shift @_;
+  my @rows = @_;
+  my @vals = split(',', $rows[0]);
+
+  # get data dimensions
+  my $height = scalar(@rows);
+  my $width  = scalar(@vals);
+
+  # create an image that is at least 100 pixels
+  my $factor = 1;
+  while ($factor * $height < 100) { $factor *= 2; }
+  my $height_scaled = $height * $factor;
+  my $width_scaled  = $width  * $factor;
+
+  # bitmap rows must have a byte count that is a multiple of 4
+  # pad it out if necessary (this data won't be displayed)
+  my $pad = ($width_scaled * 3) % 4;
+  if ($pad > 0) { $pad = 4 - $pad; }
+
+  my $filesize = $width_scaled * $height_scaled * 3 + 54;
+  print "Writing $bmpfile ($width_scaled x $height_scaled) bitmap, $filesize bytes ...\n";
+
+  # bitmap file format:  see http://www.fortunecity.com/skyscraper/windows/364/bmpffrmt.html
+  # open a file in binary mode and print bitmap file header
+  open(OUT, ">$bmpfile");
+  binmode(OUT);
+  print OUT "BM";
+  print OUT pack "I", $filesize;
+  print OUT pack "xx";
+  print OUT pack "xx";
+  print OUT pack "I", 54;
+  print OUT pack "III", 40, $width_scaled, $height_scaled;
+  print OUT pack "SS", 1, 24;
+  print OUT pack "IIIIII", 0, 0, 0, 0, 0, 0;
+
+  # print the pixel values
+  @imagerows = (); # store pixel values to be printed in javascript notation (json)
+  # run down the rows
+  for ($y = $height-1; $y >= 0; $y--) {
+    my $row = $rows[$y];
+    chomp $row;
+    my @vals = split(',', $row);
+    # may use more than one pixel per data point depending on minimum image size
+    for ($j = 0; $j < $factor; $j++) {
+      my @imagerow = ();
+      # print column values for this row
+      for ($x = 0; $x < $width; $x++) {
+        my $col = $vals[$x];
+        # may use more than one pixel per data point depending on minimum image size
+        for ($i = 0; $i < $factor; $i++) {
+          if ($col >= 256 or $col < 0) { print "ERROR: Invalid pixel value: $col\n"; }
+          print OUT pack "CCC", $col, $col, $col;
+          push @imagerow, $col;
+        }
+      }
+      # pad out the row if necessary
+      for($p=0; $p < $pad; $p++) {
+        $col = 0;
+        print OUT pack "C", $col;
+      }
+      push @imagerows, "[" . join(",", @imagerow) . "]";
+    }
+  }
+  close(OUT);
+}
+
+# given a table reference, returns array of node names in javascript (json)
+sub return_rankmapjs
+{
+  my $table = shift @_;
+  my @rows = keys %$table;
+  @rows = (sort {($a =~ /(\d+)$/)[0] <=> ($b =~ /(\d+)$/)[0]} @rows);
+  my @nodes = ();
+  my $node = "";
+  my $rank = "";
+  foreach my $row (@rows) {
+    if ($strip_mpi_rank) { ($node) = ($row =~ /([a-zA-Z\-]+\d*)/); $rank++; }
+    else { ($node, $rank) = ($row =~ /([a-zA-Z\-]+\d*):(\d+)/); }
+    if ($node) { push @nodes, '"' . $node . '"'; }
+  }
+  return (scalar(@nodes), "var rankmap = [" . join(",", @nodes) . "];");
+}
+
+# returns color string for a value from [0,1]
+sub set_color
+{
+  my $val = shift @_;
+  if ($mode eq "html") {
+    # just use grayscale in html
+    my $gray = sprintf("%x", int($val*255));
+    return "#" . $gray . $gray . $gray;
+  } else {
+    return "";
+  }
+
+  my $len = scalar(@$legend);
+  for($i=0; $i<$len; $i += 2) {
+    if ($val < $$legend[$i]) { return $$legend[$i+1]; }
+  }
+  return $$legend[$len-1];
+}
+
+# given the contents and color for a cell,
+# return a string representing the colored cell
+sub cell
+{
+  my $content = shift @_;
+  my $color   = shift @_;
+
+  my $spacing = 10;
+  my $maxlen  = 100;
+  my $len     = length($content);
+  my $extra = ($len < $spacing) ? $spacing - $len : 0;
+  if ($mode ne "html")
+  {
+    $content = ' ' x $extra . $content;
+    $len = length($content);
+    $offset = ($len > $maxlen) ? $len - $maxlen : 0;
+    $content = substr($content, $offset);
+  }
+  if ($mode eq "html") {
+    if ($color) { return "<td bgcolor=\"" . $color . "\">$content</td>"; }
+    return "<td>$content</td>";
+  } else {
+    return $content;
+  }
+}
+
+# given a list of cells, return a string representing the row
+sub row
+{
+  if ($mode eq "html") {
+    return "<tr>" . join("", @_) . "</tr>";
+  } else {
+    return join("\t", @_);
+  }
+}
+
+# given a list of rows, return a string representing the table
+sub table
+{
+  if ($mode eq "html") {
+    return "<table border=\"1\">\n" . join("\n", @_) . "\n</table>\n";
+  } else {
+    return join("\n", @_) . "\n";
+  }
+}
