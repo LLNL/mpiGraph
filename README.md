@@ -1,5 +1,5 @@
 # mpiGraph
-Benchmark to stress network and generates bandwidth images
+Benchmark to generate network bandwidth images
 
 ## Build 
     make
@@ -7,46 +7,38 @@ Benchmark to stress network and generates bandwidth images
 ## Run
 Run one MPI task per node:
 
-    srun -n <#nodes> -N <#nodes> ./mpiGraph > mpiGraph.out
-
-If you encounter errors, try reducing message counts, e.g.:
-
-    srun -n <#nodes> -N <#nodes> ./mpiGraph 4096 10 10 > mpiGraph.out
+    srun -n <#nodes> -N <#nodes> ./mpiGraph 1048576 10 10 > mpiGraph.out
 
 General usage:
 
-    mpiGraph <msg_size_in_bytes> <iterations_per_task> <window_size_of_outstanding_sends/recvs>
+    mpiGraph <size> <iters> <window>
 
-Each node sends a total of
-<iterations_per_task> * <window_size_of_outstanding_sends/recvs>
-messages, each of <msg_size_in_bytes> to every other task.
-
-You can run more than one task per node if your intent is to
-stress the MPI, but in this case, the resulting bandwidth image may
-be difficult to interpret.
+To compute bandwidth, each task averages the bandwidth from <iters> iterations.
+In each iteration, a process sends <window> messages of size <size> bytes to another process
+while it simultaneously receives an equal number of messages of equal size from another process.
+The source and destination processes in each step are not necessary the same process.
 
 Watch progress:
 
     tail -f mpiGraph.out
 
 ## Results
-Post-process to create html report with bitmaps in
-"mpiGraph.out_html/index.html":
+Parse output and create html report:
 
     crunch_mpiGraph mpiGraph.out
 
-View results:
+View results in a web browser:
 
-    firefox file://`pwd`/mpiGraph.out_html/index.html
+    firefox file:///path/to/mpiGraph.out_html/index.html
 
 # Description
 
-mpiGraph consists of an MPI application called "mpiGraph" written in C
+This package consists of an MPI application called "mpiGraph" written in C
 to measure message bandwidth and an associated "crunch_mpigraph"
-script written in Perl to process the application output into an HTML
+script written in Perl to parse the application output a generate an HTML
 report.  The mpiGraph application is designed to inspect the health
 and scalability of a high-performance interconnect while subjecting it
-to a heavy load.  This is useful to detect hardware and software
+to heavy load.  This is useful to detect hardware and software
 problems in a system, such as slow nodes, links, switches, or
 contention in switch routing.  It is also useful to characterize how
 interconnect performance changes with different settings or how one
@@ -54,34 +46,27 @@ interconnect type compares to another.
 
 Typically, one MPI task is run per node (or per interconnect link).
 For a job of N MPI tasks, the N tasks are logically arranged in a ring
-counting ranks from 0 and increasing to the right, at the end rank 0
-is to the right of rank N-1.  Then a series of N-1 steps are executed.
+counting ranks from 0 and increasing to the right with the end
+wrapping back to rank 0.  Then a series of N-1 steps are executed.
 In each step, each MPI task sends to the task D units to the right and
 simultaneously receives from the task D units to the left.  The value
 of D starts at 1 and runs to N-1, so that by the end of the N-1 steps,
 each task has sent to and received from every other task in the run,
 excluding itself.  At the end of the run, two NxN matrices of
-bandwidths are gathered and reported to stdout -- one for send
+bandwidths are gathered and written to stdout -- one for send
 bandwidths and one for receive bandwidths.
 
 The crunch_mpiGraph script is then run on this output to generate a
-report.  A key component in this report are a pair of bitmap images
+report.  It includes a pair of bitmap images
 representing bandwidth values between different task pairings.
 Pixels in this image are colored depending on relative bandwidth
 values.  The maximum bandwidth value is set to pure white (value
 255) and other values are scaled to black (0) depending on their
-percentage of the maximum.  Interesting patterns, or the lack
-thereof, make it easy to visually inspect and identify anomalous
-behavior in the system.  One may then zoom in and inspect image
-features in more detail by hovering the mouse cursor over the feature.
-Javascript embedded in the HTML report manages a pop-up tooltip with a
+percentage of the maximum.  One can then visually inspect and identify anomalous
+behavior in the system.  One may zoom in and inspect image
+features in more detail by hovering the mouse cursor over the image.
+Javascript embedded in the HTML report opens a pop-up tooltip with a
 zoomed-in view of the cursor location.
-
-mpiGraph runs in a parallel fashion so that is is able to measure
-bandwidths between all task pairings in a reasonable (scalable) time.
-Additionally, the resulting bandwidth images allow one to read the
-test results in a very concise format that scales very well up to
-machine sizes of one or two thousand nodes.
 
 ## References
 [Contention-free Routing for Shift-based Communication in MPI Applications on Large-scale Infiniband Clusters](https://e-reports-ext.llnl.gov/pdf/380228.pdf), Adam Moody, LLNL-TR-418522, Oct 2009
