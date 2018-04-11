@@ -313,6 +313,8 @@ void code(int mypid, int nnodes, int size, int times, int window)
   }
 
   /* free off memory */
+  free(sendsums);
+  free(recvsums);
   free(send_message);
   free(recv_message);
   free(status_array);
