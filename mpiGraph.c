@@ -313,6 +313,9 @@ void code(int mypid, int nnodes, int size, int times, int window)
   }
 
   /* free off memory */
+  if (mypid == 0) {
+    free(allsums);
+  }
   free(sendsums);
   free(recvsums);
   free(send_message);
