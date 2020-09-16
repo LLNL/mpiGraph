@@ -189,7 +189,7 @@ void code(int mypid, int nnodes, int size, int times, int window)
       while(!flag_sends || !flag_recvs) {
         /* check whether the sends are done */
         if (!flag_sends) {
-          MPI_Testall((k+1)/2, &request_array[(k+1)/2-1], &flag_sends, &status_array[(k+1)/2-1]);
+          MPI_Testall((k+1)/2, &request_array[(k+1)/2], &flag_sends, &status_array[(k+1)/2]);
           if (flag_sends) { __TIME_END_SEND__; }
         }
 
