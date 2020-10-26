@@ -12,15 +12,15 @@
 # 
 # Redistribution and use in source and binary forms, with or without modification,
 # are permitted provided that the following conditions are met:
-# â* Redistributions of source code must retain the above copyright notice, this
+# Ã¢* Redistributions of source code must retain the above copyright notice, this
 #    list of conditions and the disclaimer below.
-# â* Redistributions in binary form must reproduce the above copyright notice,
+# Ã¢* Redistributions in binary form must reproduce the above copyright notice,
 #    this list of conditions and the disclaimer (as noted below) in the documentation
 #    and/or other materials provided with the distribution.
-# â* Neither the name of the LLNL nor the names of its contributors may be used to
+# Ã¢* Neither the name of the LLNL nor the names of its contributors may be used to
 #    endorse or promote products derived from this software without specific prior
 #    written permission.
-# â* 
+# Ã¢* 
 # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
 # ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
 # WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
@@ -458,16 +458,16 @@ sub output_rankmap
   $rank = -1;
   foreach $row (@rows)
   {
-    if ($strip_mpi_rank) { ($node) = ($row =~ /([a-zA-Z]+\d*)/); $rank++; }
-    else { ($node, $rank) = ($row =~ /([a-zA-Z]+\d*):(\d+)/); }
+    if ($strip_mpi_rank) { ($node) = ($row =~ /([a-zA-Z]+\d*[a-zA-Z]+\d*)/); $rank++; }
+    else { ($node, $rank) = ($row =~ /([a-zA-Z]+\d*[a-zA-Z]+\d*):(\d+)/); }
     if ($node) {
       print MAP "$rank\t$node\n";
       push @nodes, $node;
     }
   }
   close(MAP);
-#  my $nodelist = join(",", @nodes);  # if you don't have compress(), use this instead
-  my $nodelist = hostlist_lite::compress(@nodes);
+  my $nodelist = join(",", @nodes);  # if you don't have compress(), use this instead
+  # my $nodelist = hostlist_lite::compress(@nodes); # there's no package on metacpan like this
   return (scalar(@nodes), $nodelist);
 }
 
@@ -755,8 +755,8 @@ sub return_rankmapjs
   my $node = "";
   my $rank = "";
   foreach my $row (@rows) {
-    if ($strip_mpi_rank) { ($node) = ($row =~ /([a-zA-Z\-]+\d*)/); $rank++; }
-    else { ($node, $rank) = ($row =~ /([a-zA-Z\-]+\d*):(\d+)/); }
+    if ($strip_mpi_rank) { ($node) = ($row =~ /([a-zA-Z\-]+\d*[a-zA-Z]+\d*)/); $rank++; }
+    else { ($node, $rank) = ($row =~ /([a-zA-Z\-]+\d*[a-ZA-Z]\d*):(\d+)/); }
     if ($node) { push @nodes, '"' . $node . '"'; }
   }
   return (scalar(@nodes), "var rankmap = [" . join(",", @nodes) . "];");
