@@ -756,7 +756,7 @@ sub return_rankmapjs
   my $rank = "";
   foreach my $row (@rows) {
     if ($strip_mpi_rank) { ($node) = ($row =~ /([a-zA-Z\-]+\d*[a-zA-Z]+\d*)/); $rank++; }
-    else { ($node, $rank) = ($row =~ /([a-zA-Z\-]+\d*[a-ZA-Z]\d*):(\d+)/); }
+    else { ($node, $rank) = ($row =~ /([a-zA-Z\-]+\d*[a-zA-Z]\d*):(\d+)/); }
     if ($node) { push @nodes, '"' . $node . '"'; }
   }
   return (scalar(@nodes), "var rankmap = [" . join(",", @nodes) . "];");
