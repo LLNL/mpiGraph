@@ -70,4 +70,4 @@ Javascript embedded in the HTML report opens a pop-up tooltip with a
 zoomed-in view of the cursor location.
 
 ## References
-[Contention-free Routing for Shift-based Communication in MPI Applications on Large-scale Infiniband Clusters](https://e-reports-ext.llnl.gov/pdf/380228.pdf), Adam Moody, LLNL-TR-418522, Oct 2009
+[Contention-free Routing for Shift-based Communication in MPI Applications on Large-scale Infiniband Clusters](https://www.osti.gov/biblio/967277), Adam Moody, LLNL-TR-418522, Oct 2009
